@@ -20,9 +20,16 @@ import (
 
 const (
 	gameWidth         = 480
-	gameHeight        = 800
+	gameHeight        = 700
 	defaultJumpHeight = 40
 	maxLevels         = 5
+	maxBgParticles    = 15
+	minBgSpeed        = 1
+	maxBgSpeed        = 2
+	initTxtLen        = 3
+	initWaveLen       = 10
+	traceLen          = 10
+	hitFrames         = 5
 )
 
 var (
@@ -31,6 +38,7 @@ var (
 	fontFace      font.Face
 	hudFontFace   font.Face
 	titleFontFace font.Face
+	bgFontFace    font.Face
 )
 
 func init() {
@@ -72,6 +80,15 @@ func init() {
 	if err != nil {
 		log.Fatal(err)
 	}
+
+	bgFontFace, err = opentype.NewFace(fnt, &opentype.FaceOptions{
+		Size:    8,
+		DPI:     dpi,
+		Hinting: font.HintingVertical,
+	})
+	if err != nil {
+		log.Fatal(err)
+	}
 }
 
 func init() {
@@ -98,6 +115,7 @@ type Game struct {
 	winText      string
 	keys         []ebiten.Key
 	keyMap       map[ebiten.Key]string
+	bgParticles  []*BgParticle
 }
 
 type Enemy struct {
@@ -110,16 +128,27 @@ type Enemy struct {
 	killed      bool
 	textArray   []string
 	partialText string
+	hitFrames   int
+}
+
+type BgParticle struct {
+	xPos, yPos, speed int
+	text              string
+	traceLen          int
 }
 
 var letters = "abcdefghijklmnopqrstuvwxyz"
+
+func rndLetter() string {
+	idx := rand.Intn(len(letters) - 1)
+	return string(letters[idx])
+}
 
 func generateText(l int) string {
 	var result string
 
 	for i := 0; i < l; i++ {
-		idx := rand.Intn(len(letters) - 1)
-		result += string(letters[idx])
+		result += rndLetter()
 	}
 
 	return result
@@ -134,6 +163,30 @@ func reverse(s []string) []string {
 	}
 
 	return r
+}
+
+func (p *BgParticle) Update() {
+	if p.yPos >= gameHeight {
+		p.yPos = 0
+		p.xPos = rand.Intn(gameWidth)
+		p.text = rndLetter()
+		p.speed = rand.Intn(maxBgSpeed-minBgSpeed) + minBgSpeed
+	}
+
+	p.yPos += p.speed
+}
+
+func (p *BgParticle) Draw(screen *ebiten.Image) {
+	for i := p.traceLen; i >= 0; i-- {
+		c := color.RGBA{
+			230 + uint8(i)*2,
+			230 + uint8(i)*2,
+			230 + uint8(i)*2,
+			255,
+		}
+
+		text.Draw(screen, p.text, bgFontFace, p.xPos, p.yPos-i, c)
+	}
 }
 
 func (g *Game) AddEnemy(xPos float64) {
@@ -172,6 +225,7 @@ func (e *Enemy) checkDamage(l string) {
 
 	if e.textArray[0] == l {
 		e.textArray = e.textArray[1:]
+		e.hitFrames = hitFrames
 	}
 }
 
@@ -197,6 +251,13 @@ func (e *Enemy) Update() {
 	e.partialText = strings.Join(reverse(e.textArray), "")
 	e.yPos += e.speed
 	e.discreteY = int(e.yPos) / e.jumpHeight * e.jumpHeight
+
+	if e.hitFrames > 0 {
+		e.hitFrames -= 1
+
+		e.discreteY += rand.Intn(8) - 4
+		e.xPos += rand.Float64()*8 - 4
+	}
 }
 
 func (e *Enemy) CheckGameOver(lineY float64) bool {
@@ -209,6 +270,10 @@ func (e *Enemy) Draw(screen *ebiten.Image) {
 }
 
 func (g *Game) Update() error {
+	for _, b := range g.bgParticles {
+		b.Update()
+	}
+
 	if !g.gameOver {
 		if !g.started {
 			if ebiten.IsKeyPressed(ebiten.KeyEnter) {
@@ -257,6 +322,10 @@ func (g *Game) Update() error {
 func (g *Game) Draw(screen *ebiten.Image) {
 	screen.Fill(color.RGBA{255, 255, 255, 255})
 
+	for _, b := range g.bgParticles {
+		b.Draw(screen)
+	}
+
 	if g.gameOver {
 		t := g.gameOverText
 		if g.gameWon {
@@ -272,14 +341,14 @@ func (g *Game) Draw(screen *ebiten.Image) {
 			}
 
 			vector.StrokeLine(screen, 0, g.redlineY, gameWidth, g.redlineY, 1.0, color.RGBA{255, 0, 0, 255}, true)
-			text.Draw(screen, fmt.Sprintf("level: %d", g.currentLevel+1), hudFontFace, 10, 730, color.RGBA{0, 0, 0, 255})
-			text.Draw(screen, fmt.Sprintf("strings left: %d", g.waveCount), hudFontFace, 10, 780, color.RGBA{0, 0, 0, 255})
+			text.Draw(screen, fmt.Sprintf("level: %d", g.currentLevel+1), hudFontFace, 10, 630, color.RGBA{0, 0, 0, 255})
+			text.Draw(screen, fmt.Sprintf("strings left: %d", g.waveCount), hudFontFace, 10, 680, color.RGBA{0, 0, 0, 255})
 		} else {
 			text.Draw(screen, "REVERSE TYPIST", titleFontFace, 20, 100, color.RGBA{0, 0, 0, 255})
 			text.Draw(screen, "RULES", hudFontFace, 200, 300, color.RGBA{0, 0, 0, 255})
 			text.Draw(screen, "1. Type strings in reverse order", hudFontFace, 20, 340, color.RGBA{0, 0, 0, 255})
 			text.Draw(screen, "2. Strings must not cross red line", hudFontFace, 20, 380, color.RGBA{0, 0, 0, 255})
-			text.Draw(screen, "press <Enter> to start", hudFontFace, 100, 730, color.RGBA{0, 0, 0, 255})
+			text.Draw(screen, "press <Enter> to start", hudFontFace, 100, 630, color.RGBA{0, 0, 0, 255})
 		}
 	}
 }
@@ -293,8 +362,6 @@ func main() {
 	ebiten.SetWindowTitle("Reverse Typist")
 
 	levels := make([]*Level, maxLevels)
-	initTxtLen := 3
-	initWaveLen := 10
 
 	for i := 0; i < maxLevels; i++ {
 		levels[i] = &Level{
@@ -314,14 +381,27 @@ func main() {
 		keyMap[ebiten.Key(i)] = string(letters[i])
 	}
 
+	bgParticles := make([]*BgParticle, maxBgParticles)
+
+	for i := 0; i < maxBgParticles; i++ {
+		bgParticles[i] = &BgParticle{
+			text:     rndLetter(),
+			xPos:     rand.Intn(gameWidth),
+			yPos:     rand.Intn(gameHeight),
+			speed:    rand.Intn(maxBgSpeed-minBgSpeed) + minBgSpeed,
+			traceLen: traceLen,
+		}
+	}
+
 	g := &Game{
 		levels:       levels,
 		currentLevel: curLevel,
 		waveCount:    waveCount,
-		redlineY:     700,
+		redlineY:     600,
 		winText:      "you won",
 		gameOverText: "game over",
 		keyMap:       keyMap,
+		bgParticles:  bgParticles,
 	}
 
 	g.AddEnemy(60)
